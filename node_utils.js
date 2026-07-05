@@ -62,9 +62,10 @@ function get_redis_subscriber(kind = "redis_queue", options = {}) {
 	// PR-Foundry fork patch (framework#67): make the realtime redis client
 	// resilient to a transient redis blip (restart / network hiccup).
 	//
-	// 1. reconnectStrategy: reconnect forever with a bounded backoff instead of
-	//    the driver default (which can stop retrying). node-redis v4 restores
-	//    subscriptions automatically on reconnect, so realtime self-heals.
+	// 1. reconnectStrategy: reconnect on a transient blip (node-redis v4 restores
+	//    subscriptions automatically on reconnect, so realtime self-heals), but
+	//    GIVE UP after a bounded number of tries so a genuinely unreachable redis
+	//    fails fast — retrying forever hangs `bench build`, which has no redis.
 	// 2. an "error" handler: @redis/client emits "error" on a dropped/refused
 	//    connection, and an UNHANDLED "error" on a Node EventEmitter is FATAL —
 	//    it crashes the socketio process, which then sits dead (the container
