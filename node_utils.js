@@ -59,17 +59,37 @@ function get_conf() {
 function get_redis_subscriber(kind = "redis_queue", options = {}) {
 	const conf = get_conf();
 	const connStr = conf[kind];
+	// PR-Foundry fork patch (framework#67): make the realtime redis client
+	// resilient to a transient redis blip (restart / network hiccup).
+	//
+	// 1. reconnectStrategy: reconnect forever with a bounded backoff instead of
+	//    the driver default (which can stop retrying). node-redis v4 restores
+	//    subscriptions automatically on reconnect, so realtime self-heals.
+	// 2. an "error" handler: @redis/client emits "error" on a dropped/refused
+	//    connection, and an UNHANDLED "error" on a Node EventEmitter is FATAL —
+	//    it crashes the socketio process, which then sits dead (the container
+	//    does not exit, so `restart: unless-stopped` never fires) until someone
+	//    restarts it by hand. Handling it keeps the process alive to reconnect.
+	//
+	// Upstream-owned file: a frappe upstream-sync can reset this — re-verify
+	// get_redis_subscriber still attaches the error handler after any sync.
+	const { socket: socketOverrides, ...restOptions } = options;
+	const socket = {
+		reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
+		...(socketOverrides || {}),
+	};
 	let client;
-	// TODO: revise after https://github.com/redis/node-redis/issues/2530
-	// is solved for a more elegant implementation
 	if (connStr && connStr.startsWith("unix://")) {
 		client = redis.createClient({
-			socket: { path: connStr.replace("unix://", "") },
-			...options,
+			socket: { path: connStr.replace("unix://", ""), ...socket },
+			...restOptions,
 		});
 	} else {
-		client = redis.createClient({ url: connStr, ...options });
+		client = redis.createClient({ url: connStr, socket, ...restOptions });
 	}
+	client.on("error", (err) => {
+		console.error(`[frappe-realtime] redis(${kind}) client error:`, err?.message || err);
+	});
 	return client;
 }
 
