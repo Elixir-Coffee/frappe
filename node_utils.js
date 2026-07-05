@@ -75,7 +75,17 @@ function get_redis_subscriber(kind = "redis_queue", options = {}) {
 	// get_redis_subscriber still attaches the error handler after any sync.
 	const { socket: socketOverrides, ...restOptions } = options;
 	const socket = {
-		reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
+		// Reconnect on a transient blip (redis restart / network hiccup), but GIVE
+		// UP after ~20 tries so a genuinely unreachable redis fails fast instead of
+		// retrying forever. Retrying forever would HANG `bench build` (which has no
+		// redis) — before this patch the unhandled error crashed that process and
+		// the build tolerated it. On give-up the connect promise rejects and the
+		// process exits, so the socketio container's restart policy recreates it
+		// and retries fresh; a transient blip reconnects well within the window.
+		reconnectStrategy: (retries) =>
+			retries > 20
+				? new Error("redis unreachable — giving up after 20 reconnect attempts")
+				: Math.min(retries * 200, 2000),
 		...(socketOverrides || {}),
 	};
 	let client;
