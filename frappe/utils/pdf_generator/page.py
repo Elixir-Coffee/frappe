@@ -79,6 +79,29 @@ def classify_intercepted_path(clean_path: str) -> tuple[str, str]:
 	return final_system_path, "continue"
 
 
+def _extract_stream_id(future) -> str:
+	"""Pull the ``Page.printToPDF`` stream handle out of the resolved CDP future.
+
+	PR-Foundry/framework#90 (fork patch) — the ASYNC printToPDF future (used for
+	non-dynamic header/footer pages) can resolve with a CDP **error** (or otherwise
+	no ``result``) instead of a stream — e.g. a near-empty header page (no letter
+	head) or a CDP hiccup under concurrent renders. The original
+	``future["result"]["stream"]`` then crashed the WHOLE render with a bare,
+	undiagnosable ``KeyError: 'result'`` (prod 2026-07-16: POS invoice-email PDFs
+	never rendered). This raises a clear, catchable ``ValueError`` carrying the CDP
+	response instead — mirroring the guard the synchronous ``generate_pdf`` path
+	already has — so ``browser.py`` can fall back to the sync render. Upstream-owned
+	— re-verify after any frappe sync. Guarded by
+	``client_app.tests.test_pdf_generator_public_path``.
+	"""
+	if not isinstance(future, dict) or "result" not in future:
+		raise ValueError(f"Page.printToPDF returned no result: {future!r}")
+	result = future["result"]
+	if not isinstance(result, dict) or "stream" not in result:
+		raise ValueError(f"Page.printToPDF result has no stream handle: {result!r}")
+	return result["stream"]
+
+
 class Page:
 	def __init__(self, session, browser_context_id, page_type):
 		self.session = session
@@ -463,8 +486,9 @@ class Page:
 		# wait for event to complete
 		task = self.wait_for_pdf.result()
 		future = task.result()
-		stream_id = future["result"]["stream"]
-		return stream_id
+		# framework#90 — guard a CDP error / no-result future instead of a bare
+		# future["result"]["stream"] KeyError that crashes the whole render.
+		return _extract_stream_id(future)
 
 	def get_pdf_from_stream(self, stream_id, raw=False):
 		from io import BytesIO
