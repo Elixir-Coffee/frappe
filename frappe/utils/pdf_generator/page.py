@@ -45,6 +45,40 @@ def resolve_intercepted_public_path(clean_path: str) -> tuple[str, bool]:
 	return final_system_path, is_safe
 
 
+def classify_intercepted_path(clean_path: str) -> tuple[str, str]:
+	"""Classify a same-host sub-resource intercepted during PDF generation into an
+	action: ``"serve"`` | ``"block"`` | ``"continue"``.
+
+	- ``serve``:    resolves inside the servable tree AND is a real file -> read + fulfill
+	- ``block``:    resolves OUTSIDE the tree (path-traversal escape)     -> Fetch.failRequest
+	- ``continue``: inside the tree but NOT a servable file — a directory
+	                (e.g. the ``public/`` root itself) or a missing file  -> Fetch.continueRequest
+
+	PR-Foundry/framework#88 (fork patch) — ``resolve_intercepted_public_path`` reports
+	``is_safe=True`` for anything under the site ``public/`` tree, INCLUDING the
+	``public/`` root directory and any url resolving to a directory / missing file.
+	``frappe.read_file`` then ``open()``s a directory (``IsADirectoryError``) or a
+	missing path (``FileNotFoundError``) INSIDE the CDP listener thread, killing the
+	listener; the render future never resolves and the whole ``get_pdf`` hangs — and
+	in a request context it hangs holding that request's DB locks (the Sales Invoice
+	naming-series ``tabSeries`` FOR UPDATE lock), 1205-timing-out concurrent invoicing
+	(prod 2026-07-16). A directory/missing path must be handled as ``continue`` (let
+	Chrome fetch it normally); hard-failing it instead aborts the headless page load
+	and surfaces as ``KeyError: 'result'`` in ``get_pdf_stream_id`` — the exact failure
+	the widened-``public/`` patch (framework#83) was added to avoid. Upstream-owned —
+	re-verify after any frappe sync. Guarded by
+	``client_app.tests.test_pdf_generator_public_path``.
+	"""
+	import os
+
+	final_system_path, is_safe = resolve_intercepted_public_path(clean_path)
+	if not is_safe:
+		return final_system_path, "block"
+	if os.path.isfile(final_system_path):
+		return final_system_path, "serve"
+	return final_system_path, "continue"
+
+
 class Page:
 	def __init__(self, session, browser_context_id, page_type):
 		self.session = session
@@ -163,10 +197,21 @@ class Page:
 					path = url.replace(get_host_url(), "").split("?v", 1)[0]
 					clean_path = urllib.parse.unquote(path)
 
-					final_system_path, is_safe = resolve_intercepted_public_path(clean_path)
+					action_path, action = classify_intercepted_path(clean_path)
 
-					if is_safe:
-						content = frappe.read_file(final_system_path, as_base64=True)
+					if action == "serve":
+						content = None
+						try:
+							content = frappe.read_file(action_path, as_base64=True)
+						except Exception:
+							# Backstop: a read error must NEVER escape the CDP listener
+							# thread — that kills the listener and hangs the whole render
+							# with the request's DB locks held (framework#88). Log and
+							# fall through to continueRequest below.
+							frappe.log_error(
+								title="PDF Generator: sub-resource read failed",
+								message=f"path {path} -> {action_path}\n{frappe.get_traceback()}",
+							)
 						response_headers = []
 						# write logic to handle all file types as required
 						if path.endswith(".svg"):
@@ -183,7 +228,7 @@ class Page:
 								return_future=True,
 							)
 							return
-					elif path:
+					elif action == "block":
 						self.session.send(
 							"Fetch.failRequest",
 							{"requestId": data["request_id"], "errorReason": "AccessDenied"},
@@ -191,9 +236,11 @@ class Page:
 						)
 						frappe.log_error(
 							title="Attempted Unauthorized File Access in PDF Generator",
-							message=f"Blocked access to: {path} \nResolved Path to: {final_system_path}",
+							message=f"Blocked access to: {path} \nResolved Path to: {action_path}",
 						)
 						return
+					# action == "continue" (directory / missing / non-file inside the
+					# tree) falls through to Fetch.continueRequest below.
 				self.session.send(
 					"Fetch.continueRequest",
 					{"requestId": data["request_id"]},
