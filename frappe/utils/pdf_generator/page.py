@@ -45,6 +45,37 @@ def resolve_intercepted_public_path(clean_path: str) -> tuple[str, bool]:
 	return final_system_path, is_safe
 
 
+def classify_intercepted_path(clean_path: str) -> tuple[str, str]:
+	"""Classify an intercepted sub-resource: returns ``(final_system_path, action)``
+	where action is ``"serve"`` | ``"block"`` | ``"continue"``.
+
+	- ``serve``    — inside the servable tree AND a real file -> read + Fetch.fulfillRequest
+	- ``block``    — outside the tree (path-traversal escape) -> Fetch.failRequest
+	- ``continue`` — inside the tree but NOT a servable file (a directory, e.g. the
+	                 ``public/`` root, or a missing file)     -> Fetch.continueRequest
+
+	Elixir-Coffee/framework#57 (fork patch) — ``resolve_intercepted_public_path`` reports
+	``is_safe=True`` for anything under ``public/``, including the ``public/`` root
+	directory itself or a URL resolving to a directory / missing file. ``read_file()`` then
+	``open()``s a non-file → ``IsADirectoryError`` / ``FileNotFoundError`` raised INSIDE the
+	CDP listener thread, which crashes the listener; the render future never resolves,
+	``get_pdf`` hangs, and in a request context it hangs holding that request's DB locks →
+	``(1205, 'Lock wait timeout exceeded')`` on concurrent invoicing. Gating serve on
+	``os.path.isfile`` (and routing non-files to ``continue``, never ``block`` — a hard
+	fail aborts the page load → ``KeyError: 'result'``) keeps the listener alive.
+	Upstream-owned line — re-verify after any frappe sync. Guarded by
+	``client_app.tests.test_pdf_generator_public_path``.
+	"""
+	import os
+
+	final_system_path, is_safe = resolve_intercepted_public_path(clean_path)
+	if not is_safe:
+		return final_system_path, "block"
+	if os.path.isfile(final_system_path):
+		return final_system_path, "serve"
+	return final_system_path, "continue"
+
+
 class Page:
 	def __init__(self, session, browser_context_id, page_type):
 		self.session = session
@@ -163,15 +194,26 @@ class Page:
 					path = url.replace(get_host_url(), "").split("?v", 1)[0]
 					clean_path = urllib.parse.unquote(path)
 
-					final_system_path, is_safe = resolve_intercepted_public_path(clean_path)
+					final_system_path, action = classify_intercepted_path(clean_path)
 
-					if is_safe:
-						content = frappe.read_file(final_system_path, as_base64=True)
-						response_headers = []
-						# write logic to handle all file types as required
-						if path.endswith(".svg"):
-							response_headers.append({"name": "Content-Type", "value": "image/svg+xml"})
+					if action == "serve":
+						# Backstop: a non-file that slipped past isfile() (a TOCTOU race, an
+						# unreadable file) must NOT raise out of this CDP listener thread —
+						# that crashes the listener and hangs the render with DB locks held
+						# (framework#57). On any read error, log and fall through to continue.
+						content = None
+						try:
+							content = frappe.read_file(final_system_path, as_base64=True)
+						except Exception:
+							frappe.log_error(
+								title="PDF Generator: sub-resource read failed, continuing",
+								message=f"{clean_path}\n{frappe.get_traceback()}",
+							)
 						if content:
+							response_headers = []
+							# write logic to handle all file types as required
+							if path.endswith(".svg"):
+								response_headers.append({"name": "Content-Type", "value": "image/svg+xml"})
 							self.session.send(
 								"Fetch.fulfillRequest",
 								{
@@ -183,7 +225,8 @@ class Page:
 								return_future=True,
 							)
 							return
-					elif path:
+						# no content (empty or read failed) -> fall through to continueRequest
+					elif action == "block":
 						self.session.send(
 							"Fetch.failRequest",
 							{"requestId": data["request_id"], "errorReason": "AccessDenied"},
@@ -194,6 +237,9 @@ class Page:
 							message=f"Blocked access to: {path} \nResolved Path to: {final_system_path}",
 						)
 						return
+					# action == "continue" (directory / missing file) -> let Chrome fetch it
+					# normally via the Fetch.continueRequest below (do NOT failRequest: a
+					# hard-failed sub-resource aborts the page load -> KeyError 'result').
 				self.session.send(
 					"Fetch.continueRequest",
 					{"requestId": data["request_id"]},
