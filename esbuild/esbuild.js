@@ -543,7 +543,20 @@ async function update_assets_json_in_cache() {
 	try {
 		await client.connect();
 	} catch (e) {
+		// PR-Foundry fork patch (framework#67 follow-on) — RETURN instead of falling
+		// through. Without this, the client.del() below is issued against a client
+		// that never connected. Upstream tolerates that only because frappe's stock
+		// reconnect is unbounded, leaving the client "reconnecting" so the command
+		// merely queues. This fork bounds reconnects in node_utils.js
+		// (get_redis_subscriber) so a genuinely unreachable redis fails fast rather
+		// than hanging `bench build` — which CLOSES the client, making del() return a
+		// REJECTED promise (ClientClosedError). Nothing awaits it, so the unhandled
+		// rejection kills the process AFTER the assets have already built fine
+		// ("Asset build failed" with a green "DONE Total Build Time" just above it).
+		// Upstream-owned file — re-verify this guard after any frappe upstream-sync.
 		log_warn("Cannot connect to redis_cache to update assets_json");
+		client.unref();
+		return;
 	}
 	client.del("assets_json", (err) => {
 		client.unref();
