@@ -47,9 +47,7 @@ class CDPSocketClient:
 			# down while this listener was still awaiting a frame. Benign teardown
 			# race; only a genuinely unexpected RuntimeError is worth logging.
 			if "Event loop is closed" not in str(e):
-				frappe.log_error(
-					title="WebSocket listening error:", message=f"{frappe.get_traceback()}"
-				)
+				frappe.log_error(title="WebSocket listening error:", message=f"{frappe.get_traceback()}")
 		except Exception:
 			frappe.log_error(title="WebSocket listening error:", message=f"{frappe.get_traceback()}")
 

@@ -12,9 +12,7 @@ https://chromedevtools.github.io/devtools-protocol/
 """
 
 
-def resolve_intercepted_public_path(
-	clean_path: str, query_params: dict | None = None
-) -> tuple[str, bool]:
+def resolve_intercepted_public_path(clean_path: str, query_params: dict | None = None) -> tuple[str, bool]:
 	"""Resolve a same-host resource intercepted during PDF generation and report
 	whether it stays inside the site's servable tree.
 
@@ -56,9 +54,7 @@ def resolve_intercepted_public_path(
 		# Upstream: private files are servable, but only to a user who may read the
 		# backing File. Mirrors frappe.utils.response.download_private_file.
 		base = os.path.realpath(frappe.utils.get_site_path("private/files"))
-		final_system_path = os.path.realpath(
-			os.path.join(base, clean_path.removeprefix("private/files/"))
-		)
+		final_system_path = os.path.realpath(os.path.join(base, clean_path.removeprefix("private/files/")))
 		can_read = False
 		if frappe.session.user == "Administrator":
 			can_read = True
@@ -75,9 +71,7 @@ def resolve_intercepted_public_path(
 	return final_system_path, os.path.commonpath([final_system_path, base]) == base
 
 
-def classify_intercepted_path(
-	clean_path: str, query_params: dict | None = None
-) -> tuple[str, str]:
+def classify_intercepted_path(clean_path: str, query_params: dict | None = None) -> tuple[str, str]:
 	"""Classify a same-host sub-resource intercepted during PDF generation into an
 	action: ``"serve"`` | ``"block"`` | ``"continue"``.
 
