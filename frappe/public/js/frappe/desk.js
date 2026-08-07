@@ -429,7 +429,9 @@ frappe.Application = class Application {
 		var link = $el.attr("href");
 		$el.remove();
 		if (link) {
-			$('<link rel="shortcut icon" href="' + link + '" type="image/x-icon">').appendTo("head");
+			$('<link rel="shortcut icon" href="' + link + '" type="image/x-icon">').appendTo(
+				"head"
+			);
 			$('<link rel="icon" href="' + link + '" type="image/x-icon">').appendTo("head");
 		}
 	}
