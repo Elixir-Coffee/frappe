@@ -376,17 +376,11 @@ def create_desktop_icons_from_workspace():
 						# payload, but validating it would refuse every icon the grid
 						# generates.
 						icon.insert(ignore_if_duplicate=True, ignore_links=True)
-				except Exception as e:
-					# PR-Foundry/framework#144 — upstream has since adopted the core fix (this
-					# handler used to call `frappe.error_log`, a LocalProxy over a LIST, which
-					# raised TypeError, escaped the per-workspace try and aborted the whole loop).
-					# What is still ours is the MESSAGE: upstream logs a bare constant string, so a
-					# failure names neither the workspace nor the cause. Keep the label + exception
-					# so per-workspace degradation stays diagnosable.
-					frappe.log_error(
-						title="Creation of Desktop Icon Failed",
-						message=f"{icon.label}: {e}",
-					)
+				except Exception:
+					# `frappe.error_log` is the request's list of errors, not a function, and
+					# calling it turned one unseedable workspace into a TypeError that aborted
+					# the loop.
+					frappe.log_error("Creation of Desktop Icon Failed")
 
 
 def create_desktop_icons_from_installed_apps():
