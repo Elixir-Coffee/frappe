@@ -8,12 +8,11 @@ from frappe.automation_engine import settings
 from frappe.automation_engine.conditions import condition_fieldnames
 from frappe.automation_engine.dispatch import kick_drainer, matches_rule, queue_trigger
 from frappe.automation_engine.queue import QUEUE, WAITING_STATES
-from frappe.automation_engine.runner import TASK_METHOD, automation_task_name
+from frappe.automation_engine.runner import RUN
 from frappe.core.doctype.scheduled_job_type.scheduled_job_type import parse_cron
 from frappe.utils import add_days, cint, get_datetime, getdate, now_datetime
 
 SCHEDULED_PAYLOAD_KEY = "scheduled_fire_at"
-RUN_LOOKUP_INDEX = "automation_run_lookup"
 
 
 def process_cron(now: datetime | None = None):
@@ -85,29 +84,11 @@ def _handled_names(automation: str, fire_at: datetime) -> set[str | None]:
 	return {*active, *completed}
 
 
-def ensure_run_lookup_index():
-	"""Index the lookup `_completed_names` runs on every scheduled tick.
-
-	Background Task carries no index of its own and grows with every run, so without this the
-	check degrades into a full scan as history accumulates.
-	"""
-	table = "tabBackground Task"
-	if not frappe.db.has_index(table, RUN_LOOKUP_INDEX):
-		# Raw DDL: the query builder does not create indexes.
-		frappe.db.sql_ddl(
-			f"ALTER TABLE `{table}` ADD INDEX `{RUN_LOOKUP_INDEX}` (`task_name`, `method`, `creation`)"
-		)
-
-
 def _completed_names(automation: str, fire_at: datetime) -> list[str | None]:
-	task = frappe.qb.DocType("Background Task")
-	return (
-		frappe.qb.from_(task)
-		.select(task.ref_docname)
-		.where(task.task_name == automation_task_name(automation))
-		.where(task.method == TASK_METHOD)
-		.where(task.creation >= fire_at)
-		.run(pluck=True)
+	return frappe.get_all(
+		RUN,
+		filters={"automation": automation, "creation": (">=", fire_at)},
+		pluck="reference_name",
 	)
 
 
@@ -246,10 +227,11 @@ def _target_date(rule, today):
 
 
 def _due_names(rule, target) -> list[str]:
-	# `between` on the whole day covers Date and Datetime fields alike.
+	# Date bounds, not datetime strings: SQLite compares Date columns as text, and the
+	# query engine widens date bounds to the whole day for Datetime fields.
 	filters = [
 		*_normalize_filters(frappe.parse_json(rule.filters) if rule.filters else None),
-		[rule.date_field, "between", [f"{target} 00:00:00", f"{target} 23:59:59"]],
+		[rule.date_field, "between", [target, target]],
 	]
 	names = frappe.get_all(rule.document_type, filters=filters, pluck="name")
 	return _condition_filtered(rule, names)

@@ -7,11 +7,10 @@ from unittest.mock import patch
 
 import frappe
 from frappe.automation_engine.dispatch import queue_trigger
-from frappe.automation_engine.runner import TASK_METHOD, automation_task_name, execute_automation
+from frappe.automation_engine.runner import RUN, execute_automation
 from frappe.automation_engine.scheduler import (
 	_handled_names,
 	_matching_names,
-	ensure_run_lookup_index,
 	process_cron,
 	process_date_based,
 )
@@ -219,28 +218,20 @@ class TestScheduler(IntegrationTestCase):
 		)
 		self.assertEqual(_matching_names(rule), [])
 
-	def test_run_lookup_index_is_created_and_idempotent(self):
-		ensure_run_lookup_index()
-		ensure_run_lookup_index()
-		self.assertTrue(frappe.db.has_index("tabBackground Task", "automation_run_lookup"))
-
 	def make_todo(self, **kwargs):
 		return frappe.get_doc({"doctype": "ToDo", "description": "x", **kwargs}).insert()
 
 	def make_run(self, rule, reference_name=None):
 		run = frappe.get_doc(
 			{
-				"doctype": "Background Task",
-				"task_id": frappe.generate_hash(length=20),
-				"task_name": automation_task_name(rule.name),
-				"user": frappe.session.user,
-				"method": TASK_METHOD,
-				"ref_doctype": "ToDo" if reference_name else None,
-				"ref_docname": reference_name,
-				"status": "Completed",
+				"doctype": RUN,
+				"automation": rule.name,
+				"reference_doctype": "ToDo" if reference_name else None,
+				"reference_name": reference_name,
+				"status": "Success",
 			}
 		).insert(ignore_permissions=True)
-		frappe.db.set_value("Background Task", run.name, "creation", "2026-07-15 10:05:10")
+		frappe.db.set_value(RUN, run.name, "creation", "2026-07-15 10:05:10")
 
 
 # The test site carries real ToDos and Events, so every date rule is scoped to the rows
@@ -374,6 +365,12 @@ class TestDateBasedScheduler(IntegrationTestCase):
 		rule = make_date_rule(document_type="Event", date_field="starts_on", date_offset=3)
 		process_date_based()
 		self.assertEqual([r.ref_name for r in self.rows(rule)], [event.name])
+
+	def test_standard_datetime_field_matches_anywhere_in_the_day(self):
+		todo = make_todo(self.days_out(10))
+		rule = make_date_rule(date_field="creation", date_offset=0)
+		process_date_based()
+		self.assertEqual([r.ref_name for r in self.rows(rule)], [todo.name])
 
 	def test_target_day_follows_the_site_timezone(self):
 		"""'now' is site-local, so the offset is measured off the site's calendar day."""

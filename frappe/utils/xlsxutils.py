@@ -10,7 +10,6 @@ from typing import Any, ClassVar, Literal
 
 import xlrd
 import xlsxwriter
-from openpyxl import load_workbook
 from xlsxwriter.format import Format
 
 import frappe
@@ -275,7 +274,7 @@ class XLSXStyleBuilder:
 				continue
 
 			if indent := row.get(field):
-				style_cell(row_idx, col_idx, register_indent_style(indent))
+				style_cell(row_idx, col_idx, register_indent_style(cint(indent)))
 
 		return self
 
@@ -644,13 +643,16 @@ def handle_html(data: str) -> str:
 def read_xlsx_file_from_attached_file(file_url=None, fcontent=None, filepath=None, *, read_only=False):
 	if file_url:
 		_file = frappe.get_doc("File", {"file_url": file_url})
-		filename = _file.get_full_path()
+		# read through the File, so a file on another storage driver works too
+		filename = BytesIO(_file.get_content())
 	elif fcontent:
 		filename = BytesIO(fcontent)
 	elif filepath:
 		filename = filepath
 	else:
 		return
+
+	from openpyxl import load_workbook
 
 	rows = []
 	wb1 = load_workbook(filename=filename, data_only=True, read_only=read_only)
