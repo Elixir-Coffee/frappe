@@ -24,7 +24,9 @@ dependencies = [
     # We depend on internal attributes,
     # do NOT add loose requirements on PyMySQL versions.
     "PyMySQL==1.1.2",
-    "pypdf==6.19.0",
+    # 6.21.2: five advisories in 6.19.0 (infinite loops, memory use, unvalidated JPEG
+    # data; GHSA-39mj-jf6j-2qj3 et al.). Fork patch, PR-Foundry/framework#283; upstream pins 6.20.1.
+    "pypdf==6.21.2",
     "PyPika @ git+https://github.com/frappe/pypika@2c50e6142b2d61d2d243e466fdd5dc03b3d918f2",
     "mysqlclient==2.2.8",
     "PyQRCode~=1.2.1",
