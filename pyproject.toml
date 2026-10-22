@@ -76,7 +76,13 @@ dependencies = [
     "rsa~=4.9.1",
     "semantic-version~=2.10.0",
     "sentry-sdk~=2.72.0",
-    "sqlglot~=30.22.0",
+    # Fork pin (PR-Foundry/framework#307): insights needs sqlglot<30.18 (30.18 moved Drop.this to
+    # Drop.tables and ibis 11 still builds the old shape, so DuckDB table overwrites and CSV imports
+    # fail). frappe uses sqlglot only in its SQLite backend (here, the log database). Upstream
+    # bumped 30.16 -> 30.22 in 028290f6ed; the pin forgoes 30.18-30.22's SQLite changes (quote
+    # escaping in quoted identifiers, COALESCE/CONCAT/GREATEST/LEAST NULL semantics, GROUP_CONCAT
+    # ORDER BY). Drop this pin once insights lifts its ceiling.
+    "sqlglot>=30.16.0,<30.18",
     "sqlparse~=0.6.0",
     "sql_metadata~=3.0.1",
     "tenacity~=9.2.1",
